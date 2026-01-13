@@ -475,3 +475,112 @@ args = Namespace(
     reload_from_files=False,
     expand_filepaths_to_save_dir=True,
 )
+
+if not torch.cuda.is_available():
+    args.cuda = False
+
+args.device = torch.device("cuda" if args.cuda else "cpu")
+    
+print("Using CUDA: {}".format(args.cuda))
+
+
+if args.expand_filepaths_to_save_dir:
+    args.vectorizer_file = os.path.join(args.save_dir,
+                                        args.vectorizer_file)
+
+    args.model_state_file = os.path.join(args.save_dir,
+                                         args.model_state_file)
+    
+set_seed_everywhere(args.seed, args.cuda)
+
+handle_dirs(args.save_dir)
+
+if args.reload_from_files and os.path.exists(args.vectorizer_file):
+    # training from a checkpoint
+    dataset = SurnameDataset.load_dataset_and_load_vectorizer(args.surname_csv, 
+                                                              args.vectorizer_file)
+else:
+    # create dataset and vectorizer
+    dataset = SurnameDataset.load_dataset_and_make_vectorizer(args.surname_csv)
+    dataset.save_vectorizer(args.vectorizer_file)
+
+vectorizer = dataset.get_vectorizer()
+
+classifier = SurnameClassifier(embedding_size=args.char_embedding_size, 
+                               num_embeddings=len(vectorizer.char_vocab),
+                               num_classes=len(vectorizer.nationality_vocab),
+                               rnn_hidden_size=args.rnn_hidden_size,
+                               padding_idx=vectorizer.char_vocab.mask_index)
+
+def make_train_state(args):
+    return {'stop_early': False,
+            'early_stopping_step': 0,
+            'early_stopping_best_val': 1e8,
+            'learning_rate': args.learning_rate,
+            'epoch_index': 0,
+            'train_loss': [],
+            'train_acc': [],
+            'val_loss': [],
+            'val_acc': [],
+            'test_loss': -1,
+            'test_acc': -1,
+            'model_filename': args.model_state_file}
+
+def update_train_state(args, model, train_state):
+    if train_state['epoch_index'] == 0:
+        torch.save(model.state_dict(), train_state['model_filename'])
+        train_state['stop_early'] = False
+
+    elif train_state['epoch_index'] >= 1:
+        loss_tm1, loss_t = train_state['val_loss'][-2:]
+         
+        if loss_t >= loss_tm1:
+            train_state['early_stopping_step'] += 1
+     
+        else:
+            if loss_t < train_state['early_stopping_best_val']:
+                torch.save(model.state_dict(), train_state['model_filename'])
+                train_state['early_stopping_best_val'] = loss_t
+
+
+            train_state['early_stopping_step'] = 0
+
+        train_state['stop_early'] = \
+            train_state['early_stopping_step'] >= args.early_stopping_criteria
+
+    return train_state
+
+
+def compute_accuracy(y_pred, y_target):
+    _, y_pred_indices = y_pred.max(dim=1)
+    n_correct = torch.eq(y_pred_indices, y_target).sum().item()
+    return n_correct / len(y_pred_indices) * 100
+
+
+classifier = classifier.to(args.device)
+dataset.class_weights = dataset.class_weights.to(args.device)
+    
+loss_func = nn.CrossEntropyLoss(dataset.class_weights)
+optimizer = optim.Adam(classifier.parameters(), lr=args.learning_rate)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer,
+                                           mode='min', factor=0.5,
+                                           patience=1)
+
+train_state = make_train_state(args)
+
+epoch_bar = tqdm(desc='training routine', 
+                          total=args.num_epochs,
+                          position=0)
+
+dataset.set_split('train')
+train_bar = tqdm(desc='split=train',
+                          total=dataset.get_num_batches(args.batch_size), 
+                          position=1, 
+                          leave=True)
+dataset.set_split('val')
+val_bar = tqdm(desc='split=val',
+                        total=dataset.get_num_batches(args.batch_size), 
+                        position=1, 
+                        leave=True)
+
+
