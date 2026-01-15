@@ -467,7 +467,7 @@ args = Namespace(
     num_epochs=100,
     learning_rate=1e-3,
     batch_size=64,
-    seed=1337,
+    seed=9248,
     early_stopping_criteria=5,
     # Runtime hyper parameter
     cuda=True,
@@ -583,4 +583,71 @@ val_bar = tqdm(desc='split=val',
                         position=1, 
                         leave=True)
 
+
+try:
+    for epoch_index in range(args.num_epochs):
+        train_state['epoch_index'] = epoch_index
+
+        dataset.set_split('train')
+
+        batch_generator = generate_batches(dataset, batch_size = args.batch_size, device = args.device)
+        running_loss = 0.0
+        running_acc = 0.0
+        classifier.train()
+
+        for batch_index, batch_dict in enumerate(batch_generator):
+            optimizer.zero_grad()
+
+            y_pred = classifier(x_in = batch_dict['x_data'], x_lengths = batch_dict['length'])
+
+            loss = loss_func(y_pred, batch_dict['y_target'])
+            running_loss += (loss.item() - running_loss) / (batch_index + 1)
+
+            loss.backward()
+            optimizer.step()
+
+            acc_t = compute_accuracy(y_pred, batch_dict['y_target'])
+            running_acc += (acc_t - running_acc)/(batch_index + 1)
+
+            train_bar.set_postfix(loss=running_loss, acc=running_acc, epoch=epoch_index)
+            train_bar.update()
+        
+        train_state['train_loss'].append(running_loss)
+        train_state['train_acc'].append(running_acc)
+
+        dataset.set_split('val')
+        batch_generator = generate_batches(dataset, batch_size=args.batch_size, device=args.device)
+
+        running_loss = 0.
+        running_acc = 0.
+        classifier.eval()
+
+        for batch_index, batch_dict in enumerate(batch_generator):
+            y_pred = classifier(x_in = batch_dict['x_in'], x_lengths = batch_dict['x_lengths'])
+
+            loss = loss_func(y_pred, batch_dict['y_target'])
+            running_loss += (loss.item() - running_loss)/(batch_index + 1)
+
+            acc_t = compute_accuracy(y_pred, batch_dict['y_target'])
+            running_acc += (acc_t - running_acc)/(batch_index + 1)
+            val_bar.set_postfix(loss=running_loss, acc=running_acc, epoch=epoch_index)
+            val_bar.update()
+
+        train_state['val_loss'].append(running_loss)
+        train_state['val_acc'].append(running_acc)
+
+        train_state = update_train_state(args=args, model=classifier, train_state=train_state)
+
+        scheduler.step(train_state['val_loss'][-1])
+
+        train_bar.n = 0
+        val_bar.n = 0
+        epoch_bar.update()
+
+        if train_state['early_stop']:
+            break
+
+except KeyboardInterrupt:
+    print("Exiting loop")
+    
 
