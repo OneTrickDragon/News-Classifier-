@@ -649,5 +649,54 @@ try:
 
 except KeyboardInterrupt:
     print("Exiting loop")
-    
 
+
+classifier.load_state_dict(torch.load(train_state['model_filename']))
+
+classifier = classifier.to(args.device)
+dataset.class_weights = dataset.class_weights.to(args.device)
+loss_func = nn.CrossEntropyLoss(dataset.class_weights)
+
+dataset.set_split('test')
+batch_generator = generate_batches(dataset, 
+                                   batch_size=args.batch_size, 
+                                   device=args.device)
+running_loss = 0.
+running_acc = 0.
+classifier.eval()
+
+for batch_index, batch_dict in enumerate(batch_generator):
+    y_pred =  classifier(batch_dict['x_data'],
+                         x_lengths=batch_dict['x_length'])
+    
+    loss = loss_func(y_pred, batch_dict['y_target'])
+    loss_t = loss.item()
+    running_loss += (loss_t - running_loss) / (batch_index + 1)
+
+    acc_t = compute_accuracy(y_pred, batch_dict['y_target'])
+    running_acc += (acc_t - running_acc) / (batch_index + 1)
+
+train_state['test_loss'] = running_loss
+train_state['test_acc'] = running_acc
+
+print("Test loss: {};".format(train_state['test_loss']))
+print("Test Accuracy: {}".format(train_state['test_acc']))
+
+def predict_nationality(surname, classifier, vectorizer):
+    vectorized_surname, vec_length = vectorizer.vectorize(surname)
+    vectorized_surname = torch.tensor(vectorized_surname).unsqueeze(dim=0)
+    vec_length = torch.tensor([vec_length], dtype=torch.int64)
+    
+    result = classifier(vectorized_surname, vec_length, apply_softmax=True)
+    probability_values, indices = result.max(dim=1)
+    
+    index = indices.item()
+    prob_value = probability_values.item()
+
+    predicted_nationality = vectorizer.nationality_vocab.lookup_index(index)
+
+    return {'nationality': predicted_nationality, 'probability': prob_value, 'surname': surname}
+
+classifier = classifier.to("cpu")
+for surname in ['McMahan', 'Nakamoto', 'Wan', 'Cho']:
+    print(predict_nationality(surname, classifier, vectorizer))
