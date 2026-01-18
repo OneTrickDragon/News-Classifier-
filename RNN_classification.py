@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 
 class Vocabulary(object):
     """Class to process text and extract vocabulary for mapping"""
@@ -381,7 +381,7 @@ class ElmanRNN(nn.Module):
     def _initial_hidden(self, batch_size):
         return torch.zeros((batch_size, self.hidden_size))
     
-    def forward_pass(self, x_in, initial_hidden = None):
+    def forward(self, x_in, initial_hidden = None):
         if self.batch_first:
             batch_size, seq_size, feat_size = x_in.size()
             x_in = x_in.permute(1, 0, 2)
@@ -423,23 +423,23 @@ class SurnameClassifier(nn.Module):
         self.fc2 = nn.Linear(in_features = rnn_hidden_size, out_features = num_classes)
 
 
-        def forward(self, x_in, x_lengths=None, apply_softmax=False):
-            x_embedded = self.emb(x_in)
-            y_out = self.rnn(x_embedded)
+    def forward(self, x_in, x_lengths=None, apply_softmax=False):
+        x_embedded = self.emb(x_in)
+        y_out = self.rnn(x_embedded)
 
-            if x_lengths is not None:
-                y_out = column_gather(y_out, x_lengths)
+        if x_lengths is not None:
+            y_out = column_gather(y_out, x_lengths)
 
-            else:
-                y_out = y_out[:,-1, :]
-            
-            y_out = F.relu(self.fc1(F.dropout(y_out, 0.5)))
-            y_out = self.fc2(F.dropout(y_out, 0.5))
+        else:
+            y_out = y_out[:,-1, :]
+        
+        y_out = F.relu(self.fc1(F.dropout(y_out, 0.5)))
+        y_out = self.fc2(F.dropout(y_out, 0.5))
 
-            if apply_softmax:
-                y_out = F.softmax(y_out, dim=1)
+        if apply_softmax:
+            y_out = F.softmax(y_out, dim=1)
 
-            return y_out
+        return y_out
         
 
 def set_seed_everywhere(seed, cuda):
@@ -456,7 +456,7 @@ def handle_dirs(dirpath):
 
 args = Namespace(
     # Data and path information
-    surname_csv="data/surnames/surnames_with_splits.csv",
+    surname_csv="surnames/surnames_with_splits.csv",
     vectorizer_file="vectorizer.json",
     model_state_file="model.pth",
     save_dir="model_storage/ch6/surname_classification",
@@ -598,7 +598,7 @@ try:
         for batch_index, batch_dict in enumerate(batch_generator):
             optimizer.zero_grad()
 
-            y_pred = classifier(x_in = batch_dict['x_data'], x_lengths = batch_dict['length'])
+            y_pred = classifier(batch_dict['x_data'], batch_dict['x_length'])
 
             loss = loss_func(y_pred, batch_dict['y_target'])
             running_loss += (loss.item() - running_loss) / (batch_index + 1)
@@ -623,7 +623,7 @@ try:
         classifier.eval()
 
         for batch_index, batch_dict in enumerate(batch_generator):
-            y_pred = classifier(x_in = batch_dict['x_in'], x_lengths = batch_dict['x_lengths'])
+            y_pred = classifier(x_in = batch_dict['x_data'], x_lengths = batch_dict['x_length'])
 
             loss = loss_func(y_pred, batch_dict['y_target'])
             running_loss += (loss.item() - running_loss)/(batch_index + 1)
@@ -644,7 +644,7 @@ try:
         val_bar.n = 0
         epoch_bar.update()
 
-        if train_state['early_stop']:
+        if train_state['stop_early']:
             break
 
 except KeyboardInterrupt:
@@ -700,3 +700,4 @@ def predict_nationality(surname, classifier, vectorizer):
 classifier = classifier.to("cpu")
 for surname in ['McMahan', 'Nakamoto', 'Wan', 'Cho']:
     print(predict_nationality(surname, classifier, vectorizer))
+    
